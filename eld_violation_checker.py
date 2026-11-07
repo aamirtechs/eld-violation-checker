@@ -162,11 +162,18 @@ def check_driver(driver, entries, limit):
         window_hours = minutes_between(period_start, start) / 60.0
         window_end = minutes_between(period_start, end) / 60.0
         if window_end > 14.0 and start not in flagged["14h"]:
+            # Exact minutes of this span driven past the 14-hour mark:
+            # a span that straddles the mark only counts its tail, a
+            # span that starts after it counts in full.
+            over_minutes = int(round(
+                (window_end - max(14.0, window_hours)) * 60))
             violations.append({
                 "driver": driver, "date": date_text,
                 "rule": "14-hour window",
-                "detail": "driving at %s, %.2f hours after coming on duty"
-                          % (start.strftime("%H:%M"), window_hours),
+                "detail": "driving at %s, %.2f hours after coming on duty, "
+                          "%d minutes over the 14-hour window"
+                          % (start.strftime("%H:%M"), window_hours,
+                             over_minutes),
             })
             flagged["14h"].add(start)
         if driving_since_break >= 8 * 60 and start not in flagged["break"]:
