@@ -150,6 +150,59 @@ class TestDataErrors(unittest.TestCase):
         self.assertEqual(result["drivers"][0]["driving_hours"], 8.0)
 
 
+class TestDriverFilter(unittest.TestCase):
+    def run_cli(self, args):
+        return subprocess.run(
+            [sys.executable, os.path.join(ROOT, "eld_violation_checker.py")]
+            + args, capture_output=True, text=True)
+
+    def multi_driver_log(self):
+        # Jane Doe is compliant; John Roe drives 8 cumulative hours
+        # with no 30-minute break and trips the break rule.
+        handle = tempfile.NamedTemporaryFile("w", suffix=".json",
+                                             delete=False)
+        json.dump([
+            entry("Jane Doe", "2026-10-26", "08:00", "12:00", "DRIVING"),
+            entry("Jane Doe", "2026-10-26", "12:00", "12:30", "ON"),
+            entry("John Roe", "2026-10-26", "08:00", "12:00", "DRIVING"),
+            entry("John Roe", "2026-10-26", "12:00", "12:15", "ON"),
+            entry("John Roe", "2026-10-26", "12:15", "16:15", "DRIVING"),
+            entry("John Roe", "2026-10-26", "16:15", "17:15", "DRIVING"),
+        ], handle)
+        handle.close()
+        return handle.name
+
+    def test_driver_filter_checks_only_one_driver(self):
+        path = self.multi_driver_log()
+        try:
+            # Control: without the filter John's break violation shows.
+            unfiltered = self.run_cli([path, "--json"])
+            self.assertIn("30-minute break",
+                          [v["rule"] for v in
+                           json.loads(unfiltered.stdout)["violations"]])
+            proc = self.run_cli([path, "--driver", "Jane Doe", "--json"])
+            self.assertEqual(proc.returncode, 0)
+            data = json.loads(proc.stdout)
+            self.assertEqual(
+                [driver["driver"] for driver in data["drivers"]],
+                ["Jane Doe"])
+            self.assertEqual(data["violations"], [])
+            self.assertNotIn("John Roe", proc.stdout)
+        finally:
+            os.unlink(path)
+
+    def test_driver_filter_unknown_name_exits_two(self):
+        path = self.multi_driver_log()
+        try:
+            proc = self.run_cli([path, "--driver", "Nobody"])
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("no driver 'Nobody'", proc.stderr)
+            self.assertIn("Jane Doe", proc.stderr)
+            self.assertIn("John Roe", proc.stderr)
+        finally:
+            os.unlink(path)
+
+
 class TestCli(unittest.TestCase):
     def run_cli(self, args):
         return subprocess.run(
