@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ELD Violation Checker - AamirTechs</title>
+<style>
+:root{--navy:#0b1f3a;--gold:#d4a72c;--bg:#f6f8fb;--ink:#1c2733;--muted:#5b6b7c;--line:#d9e1ea}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--navy);color:#fff;padding:28px 20px;border-bottom:4px solid var(--gold)}
+header .wrap{max-width:880px;margin:0 auto}
+header h1{margin:0 0 6px;font-size:1.6rem}
+header p{margin:0;color:#c8d4e4}
+main{max-width:880px;margin:24px auto;padding:0 20px}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(11,31,58,.08)}
+label{display:block;font-weight:600;margin:14px 0 6px}
+.card>label:first-child{margin-top:0}
+textarea{width:100%;min-height:180px;padding:10px;border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.85rem}
+input[type=text],input[type=number],select{padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:.95rem;width:100%}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:4px}
+.grid label{margin:0 0 6px}
+.row{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+button{background:var(--navy);color:#fff;border:0;border-radius:8px;padding:10px 18px;font-size:.95rem;cursor:pointer}
+button.alt{background:#fff;color:var(--navy);border:1px solid var(--navy)}
+button.gold{background:var(--gold);color:#0b1f3a;font-weight:600}
+pre{background:#0b1f3a;color:#eef3f9;border-radius:8px;padding:16px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;min-height:60px;font-size:.85rem}
+footer{max-width:880px;margin:0 auto 32px;padding:0 20px;color:var(--muted);font-size:.9rem}
+footer a{color:var(--navy)}
+</style>
+</head>
+<body>
+<header><div class="wrap"><h1>ELD Violation Checker</h1><p>Check ELD duty log rows for US Hours of Service violations, with the rule and the numbers behind each flag.</p></div></header>
+<main><div class="card">
+<label for="file">Input JSON file</label>
+<input type="file" id="file" accept=".json,application/json">
+<label for="input">Or paste the JSON input</label>
+<textarea id="input" spellcheck="false" placeholder="Paste a JSON list of ELD log entries here, or load the sample."></textarea>
+<label>Options</label>
+<div class="grid">
+<div><label for="opt-limit">Weekly on-duty limit (hours)</label><select id="opt-limit"><option value="70" selected>70 (8 days)</option><option value="60">60 (7 days)</option></select></div>
+</div>
+<div class="row"><button class="gold" id="run" type="button">Run</button><button class="alt" id="sample" type="button">Load sample</button><button class="alt" id="download" type="button">Download report</button></div>
+<label for="out">Report</label>
+<pre id="out">Your report will appear here.</pre>
+</div></main>
+<footer>
+<p>Built by AamirTechs. <a href="https://aamirtechs.github.io/">All tools</a> | <a href="https://github.com/aamirtechs/eld-violation-checker">Source</a></p>
+<p>Privacy: this tool runs 100% in your browser, nothing is uploaded.</p>
+</footer>
+<script id="core">
+// Pure logic port of eld_violation_checker.py. No DOM access in this block.
+var STATUSES = ["OFF", "SB", "DRIVING", "ON"];
+var ON_DUTY = ["DRIVING", "ON"];
+var RESET_MINUTES = 10 * 60;
+var BREAK_MINUTES = 30;
+function pyRepr(v) {
+  if (v === null || v === undefined) return "None";
+  if (v === true) return "True";
+  if (v === false) return "False";
+  if (typeof v === "string") {
+    var esc = v.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
+    if (v.indexOf("'") >= 0 && v.indexOf('"') < 0) return '"' + esc + '"';
+    return "'" + esc.replace(/'/g, "\\'") + "'";
+  }
+  if (typeof v === "number") return String(v);
+  return JSON.stringify(v);
+}
+function pad2(n) { return (n < 10 ? "0" : "") + n; }
+function parseDateTime(dateText, timeText) {
+  var m = /^(\d{4})-(\d{1,2})-(\d{1,2}) (\d{1,2}):(\d{1,2})$/.exec(String(dateText) + " " + String(timeText));
+  if (!m) throw new Error("bad date or time");
+  var y = +m[1], mo = +m[2], d = +m[3], h = +m[4], mi = +m[5];
+  var ms = Date.UTC(y, mo - 1, d, h, mi);
+  var dt = new Date(ms);
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d ||
+      dt.getUTCHours() !== h || dt.getUTCMinutes() !== mi) throw new Error("bad date or time");
+  return ms;
+}
+function fmtHM(ms) {
+  var dt = new Date(ms);
+  return pad2(dt.getUTCHours()) + ":" + pad2(dt.getUTCMinutes());
+}
+function hours2(minutes) {
+  // Python round(minutes / 60, 2): round half to even on the float value.
+  var x = minutes / 60;
+  var n = x * 100;
+  var f = Math.floor(n);
+  var diff = n - f;
+  var r;
+  if (diff > 0.5) r = f + 1;
+  else if (diff < 0.5) r = f;
+  else r = (f % 2 === 0 ? f : f + 1);
+  return r / 100;
+}
+function fmt2(x) { return x.toFixed(2); }
+function checkDriver(driver, entries, limit) {
+  var violations = [], errors = [], rows = [];
+  entries.forEach(function (entry, index) {
+    var fields = ["date", "start", "end", "status"];
+    var missing = fields.filter(function (f) { return !(f in entry); });
+    if (missing.length) {
+      missing.forEach(function (f) { errors.push("entry " + index + ": missing field " + f); });
+      return;
+    }
+    var status = String(entry.status).toUpperCase();
+    if (STATUSES.indexOf(status) < 0) {
+      errors.push("entry " + index + ": unknown status " + pyRepr(entry.status));
+      return;
+    }
+    var start, end;
+    try {
+      start = parseDateTime(entry.date, entry.start);
+      end = parseDateTime(entry.date, entry.end);
+    } catch (e) {
+      errors.push("entry " + index + ": bad date or time " + pyRepr(entry.date) + " " + pyRepr(entry.start));
+      return;
+    }
+    if (String(entry.end) < String(entry.start) && end <= start) {
+      errors.push("entry " + index + ": end " + entry.end + " is before start " + entry.start);
+      return;
+    }
+    rows.push({ start: start, end: end, status: status, date: entry.date });
+  });
+  rows.sort(function (a, b) {
+    if (a.start !== b.start) return a.start - b.start;
+    if (a.end !== b.end) return a.end - b.end;
+    if (a.status !== b.status) return a.status < b.status ? -1 : 1;
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    return 0;
+  });
+  for (var i = 1; i < rows.length; i++) {
+    if (rows[i].start < rows[i - 1].end) {
+      errors.push("overlap: " + rows[i].date + " " + fmtHM(rows[i].start) + " overlaps the previous entry");
+    }
+  }
+  var onDutyByDay = {};
+  rows.forEach(function (row) {
+    if (ON_DUTY.indexOf(row.status) >= 0) {
+      onDutyByDay[row.date] = (onDutyByDay[row.date] || 0) + (row.end - row.start) / 60000;
+    }
+  });
+  function onDutyInWindow(dayText, days) {
+    var base = parseDateTime(dayText, "00:00");
+    var total = 0;
+    for (var offset = 0; offset < days; offset++) {
+      var key = new Date(base - offset * 86400000).toISOString().slice(0, 10);
+      total += onDutyByDay[key] || 0;
+    }
+    return total;
+  }
+  var drivingMinutes = 0, periodStart = null, drivingSinceBreak = 0;
+  var flagged14 = {}, flaggedBreak = {}, flaggedLimit = {};
+  var totalDriving = 0, totalOnDuty = 0;
+  rows.forEach(function (row) {
+    var span = (row.end - row.start) / 60000;
+    if (ON_DUTY.indexOf(row.status) >= 0) totalOnDuty += span;
+    if (row.status === "DRIVING") totalDriving += span;
+    if (row.status === "OFF" || row.status === "SB") {
+      if (span >= RESET_MINUTES) {
+        drivingMinutes = 0;
+        periodStart = null;
+        drivingSinceBreak = 0;
+      } else if (span >= BREAK_MINUTES) {
+        drivingSinceBreak = 0;
+      }
+      return;
+    }
+    if (row.status === "ON") {
+      if (periodStart === null) periodStart = row.start;
+      return;
+    }
+    // DRIVING
+    if (periodStart === null) periodStart = row.start;
+    var windowHours = (row.start - periodStart) / 3600000;
+    var windowEnd = (row.end - periodStart) / 3600000;
+    if (windowEnd > 14.0 && !flagged14[row.start]) {
+      violations.push({
+        driver: driver, date: row.date, rule: "14-hour window",
+        detail: "driving at " + fmtHM(row.start) + ", " + fmt2(windowHours) + " hours after coming on duty"
+      });
+      flagged14[row.start] = true;
+    }
+    if (drivingSinceBreak >= 8 * 60 && !flaggedBreak[row.start]) {
+      violations.push({
+        driver: driver, date: row.date, rule: "30-minute break",
+        detail: "driving at " + fmtHM(row.start) + " after " + fmt2(drivingSinceBreak / 60) + " hours driving without a 30-minute break"
+      });
+      flaggedBreak[row.start] = true;
+    }
+    var projected = drivingMinutes + span;
+    if (projected > 11 * 60 && drivingMinutes <= 11 * 60) {
+      var over = projected - 11 * 60;
+      violations.push({
+        driver: driver, date: row.date, rule: "11-hour driving limit",
+        detail: "driving " + fmt2(projected / 60) + " hours in this duty period, " + fmt2(over / 60) + " hours over the 11-hour limit"
+      });
+    }
+    drivingMinutes = projected;
+    drivingSinceBreak += span;
+    var days = (limit === 60 ? 7 : 8);
+    var windowTotal = onDutyInWindow(row.date, days);
+    if (windowTotal > limit * 60 && !flaggedLimit[row.date]) {
+      violations.push({
+        driver: driver, date: row.date, rule: limit + "-hour limit",
+        detail: fmt2(windowTotal / 60) + " on-duty hours in " + days + " days ending " + row.date + ", over the " + limit + "-hour limit"
+      });
+      flaggedLimit[row.date] = true;
+    }
+  });
+  var stats = {
+    driver: driver, entries: rows.length,
+    drivingHours: hours2(totalDriving), onDutyHours: hours2(totalOnDuty),
+    violations: violations.length, errors: errors.length
+  };
+  return { violations: violations, errors: errors, stats: stats };
+}
+function checkLog(entries, limit) {
+  var byDriver = {}, order = [];
+  entries.forEach(function (entry) {
+    var key = (entry && typeof entry === "object" && "driver" in entry) ? entry.driver : "unknown";
+    var skey = String(key);
+    if (!(skey in byDriver)) { byDriver[skey] = { driver: key, entries: [] }; order.push(skey); }
+    byDriver[skey].entries.push(entry);
+  });
+  var sortedKeys = order.slice().sort();
+  var result = { drivers: [], violations: [], errors: [] };
+  sortedKeys.forEach(function (skey) {
+    var group = byDriver[skey];
+    var out = checkDriver(group.driver, group.entries, limit);
+    result.drivers.push(out.stats);
+    out.violations.forEach(function (v) { result.violations.push(v); });
+    out.errors.forEach(function (e) { result.errors.push(e); });
+  });
+  return result;
+}
+function renderText(result) {
+  var lines = ["ELD HOS check", "============="];
+  result.drivers.forEach(function (d) {
+    lines.push(String(d.driver) + ": " + d.entries + " entries, " + fmt2(d.drivingHours) +
+      " driving hours, " + fmt2(d.onDutyHours) + " on-duty hours, " +
+      d.violations + " violations, " + d.errors + " errors");
+  });
+  lines.push("");
+  if (result.violations.length) {
+    lines.push("Violations:");
+    result.violations.forEach(function (v) {
+      lines.push("  " + v.driver + " " + v.date + " [" + v.rule + "] " + v.detail);
+    });
+  } else {
+    lines.push("Violations: none");
+  }
+  lines.push("");
+  if (result.errors.length) {
+    lines.push("Data errors:");
+    result.errors.forEach(function (e) { lines.push("  " + e); });
+  } else {
+    lines.push("Data errors: none");
+  }
+  return lines.join("\n") + "\n";
+}
+window.runTool = function (inputText, options) {
+  options = options || {};
+  var limit = Number(options.limit) === 60 ? 60 : 70;
+  var data;
+  try { data = JSON.parse(inputText); }
+  catch (e) { return "error: invalid JSON: " + e.message + "\n"; }
+  if (!Array.isArray(data)) return "error: log file must hold a JSON list of entries\n";
+  return renderText(checkLog(data, limit));
+};
+</script>
+<script>
+var SAMPLE = `[
+  {
+    "date": "2026-10-26",
+    "driver": "Jane Doe",
+    "end": "12:00",
+    "start": "08:00",
+    "status": "DRIVING"
+  },
+  {
+    "date": "2026-10-26",
+    "driver": "Jane Doe",
+    "end": "12:30",
+    "start": "12:00",
+    "status": "ON"
+  },
+  {
+    "date": "2026-10-26",
+    "driver": "Jane Doe",
+    "end": "13:00",
+    "start": "12:30",
+    "status": "OFF"
+  },
+  {
+    "date": "2026-10-26",
+    "driver": "Jane Doe",
+    "end": "17:00",
+    "start": "13:00",
+    "status": "DRIVING"
+  }
+]`;
+var inputEl = document.getElementById("input");
+var outEl = document.getElementById("out");
+var lastReport = "";
+document.getElementById("file").addEventListener("change", function (ev) {
+  var f = ev.target.files && ev.target.files[0];
+  if (!f) return;
+  var reader = new FileReader();
+  reader.onload = function () { inputEl.value = String(reader.result || ""); };
+  reader.readAsText(f);
+});
+document.getElementById("sample").addEventListener("click", function () {
+  inputEl.value = SAMPLE;
+});
+document.getElementById("run").addEventListener("click", function () {
+  var options = { limit: Number(document.getElementById("opt-limit").value) };
+  try {
+    lastReport = window.runTool(inputEl.value, options);
+    outEl.textContent = lastReport;
+  } catch (e) {
+    lastReport = "error: " + e.message + "\n";
+    outEl.textContent = lastReport;
+  }
+});
+document.getElementById("download").addEventListener("click", function () {
+  var text = lastReport || outEl.textContent;
+  var blob = new Blob([text], { type: "text/plain" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = "eld-hos-report.txt";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+</script>
+</body>
+</html>

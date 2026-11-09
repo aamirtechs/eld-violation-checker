@@ -1,4 +1,5 @@
 # eld-violation-checker
+**Live tool:** https://aamirtechs.github.io/eld-violation-checker/ (runs in your browser, no install)
 
 Paste ELD duty log rows in as JSON and get US Hours of Service
 violations back, with the rule and the numbers behind each flag. It
