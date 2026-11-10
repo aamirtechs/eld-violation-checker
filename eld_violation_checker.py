@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Check ELD duty log rows for US Hours of Service (HOS) violations.
 
-Input is a JSON file holding a list of log entries. Each entry is an
+Input is a JSON file holding a list of log entries, or a CSV file
+(with a header row) whose columns are driver, date, start, end, and
+status — the same fields as the JSON format. A JSON entry is an
 object with:
 
     {"driver": "Jane Doe", "date": "2026-10-26",
@@ -38,6 +40,7 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 import sys
 from datetime import datetime, timedelta
@@ -61,7 +64,44 @@ def hours(value_minutes):
     return round(value_minutes / 60.0, 2)
 
 
+CSV_COLUMNS = ("driver", "date", "start", "end", "status")
+
+
+def load_csv(path):
+    """Load duty log rows from a CSV file with a header row.
+
+    The header must name the same columns as the JSON format (driver,
+    date, start, end, status); extra columns are ignored. Values are
+    read as text, so no quoting beyond the CSV rules is needed.
+    """
+    entries = []
+    with open(path, "r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValueError("CSV file is missing its header row")
+        reader.fieldnames = [name.strip() for name in reader.fieldnames]
+        missing = [name for name in CSV_COLUMNS
+                   if name not in reader.fieldnames]
+        if missing:
+            raise ValueError(
+                "CSV header is missing column(s): %s" % ", ".join(missing))
+        for row in reader:
+            entry = {}
+            for name in CSV_COLUMNS:
+                value = row.get(name)
+                entry[name] = "" if value is None else value.strip()
+            entries.append(entry)
+    return entries
+
+
 def load_entries(path):
+    """Load log entries from a JSON or CSV file.
+
+    A path ending in .csv is read as CSV with a header row; anything
+    else is read as JSON. Both return the same list of entry dicts.
+    """
+    if path.lower().endswith(".csv"):
+        return load_csv(path)
     with open(path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
     if not isinstance(data, list):
@@ -259,7 +299,7 @@ def render_text(result):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Check ELD duty logs for Hours of Service violations.")
-    parser.add_argument("log", help="JSON log file (list of entries)")
+    parser.add_argument("log", help="JSON or CSV log file (list of entries)")
     parser.add_argument("--json", action="store_true",
                         help="print machine-readable JSON")
     parser.add_argument("--limit", type=int, choices=(60, 70), default=70,
@@ -269,7 +309,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         entries = load_entries(args.log)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, csv.Error) as exc:
         print("error: %s" % exc, file=sys.stderr)
         return 2
     result = check_log(entries, args.limit)

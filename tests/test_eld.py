@@ -185,5 +185,51 @@ class TestCli(unittest.TestCase):
             os.unlink(path)
 
 
+class TestCsvInput(unittest.TestCase):
+    def run_cli(self, args):
+        return subprocess.run(
+            [sys.executable, os.path.join(ROOT, "eld_violation_checker.py")]
+            + args, capture_output=True, text=True)
+
+    def test_csv_loader_matches_json_entries(self):
+        from_csv = eld.load_csv(os.path.join(ROOT, "examples",
+                                             "violations.csv"))
+        from_json = eld.load_entries(os.path.join(ROOT, "examples",
+                                                  "violations.json"))
+        self.assertEqual(from_csv, from_json)
+        self.assertEqual(
+            eld.check_log(from_csv, 70), eld.check_log(from_json, 70))
+
+    def test_cli_accepts_csv_file(self):
+        proc = self.run_cli(
+            [os.path.join(ROOT, "examples", "violations.csv"), "--check"])
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("11-hour driving limit", proc.stdout)
+
+    def test_cli_csv_missing_column_exits_two(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".csv",
+                                         delete=False, newline="") as handle:
+            handle.write("driver,date,start,end\n")
+            handle.write("Jane Doe,2026-10-26,08:00,12:00\n")
+            path = handle.name
+        try:
+            proc = self.run_cli([path])
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("missing column", proc.stderr)
+        finally:
+            os.unlink(path)
+
+    def test_cli_csv_without_header_exits_two(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".csv",
+                                         delete=False, newline="") as handle:
+            path = handle.name
+        try:
+            proc = self.run_cli([path])
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("header", proc.stderr)
+        finally:
+            os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main()

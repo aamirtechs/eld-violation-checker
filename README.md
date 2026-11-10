@@ -27,8 +27,9 @@ checker, not legal advice.
 
 ## Input format
 
-A JSON list of entries. Dates are `YYYY-MM-DD`, times are 24-hour
-`HH:MM`, and status is one of `OFF`, `SB`, `DRIVING`, `ON`:
+A JSON list of entries, or the same rows as a CSV file with a header
+row. Dates are `YYYY-MM-DD`, times are 24-hour `HH:MM`, and status is
+one of `OFF`, `SB`, `DRIVING`, `ON`:
 
 ```json
 [
@@ -39,8 +40,16 @@ A JSON list of entries. Dates are `YYYY-MM-DD`, times are 24-hour
 ]
 ```
 
-One date per row: a row that spans midnight should be split into two
-rows at midnight, one per date.
+```csv
+driver,date,start,end,status
+Jane Doe,2026-10-26,08:00,12:00,DRIVING
+Jane Doe,2026-10-26,12:00,12:30,ON
+```
+
+A file named `.csv` is read as CSV (the header must name the same
+columns: driver, date, start, end, status); anything else is read as
+JSON. One date per row: a row that spans midnight should be split
+into two rows at midnight, one per date.
 
 ## Usage
 
@@ -90,9 +99,9 @@ Data errors: none
 python3 -m unittest discover -s tests
 ```
 
-15 tests, covering a clean day, each rule on its own, the 10-hour
-reset, the 60 and 70-hour limits, overlap and bad-status errors, and
-the CLI exit codes.
+Tests cover a clean day, each rule on its own, the 10-hour reset, the
+60 and 70-hour limits, overlap and bad-status errors, the CLI exit
+codes, and the CSV input path.
 
 ## License
 
