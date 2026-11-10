@@ -34,6 +34,7 @@ Usage:
     python3 eld_violation_checker.py examples/log.json
     python3 eld_violation_checker.py log.json --json
     python3 eld_violation_checker.py log.json --limit 60
+    python3 eld_violation_checker.py log.json --driver "Jane Doe"
     python3 eld_violation_checker.py log.json --check
 """
 
@@ -264,6 +265,9 @@ def main(argv=None):
                         help="print machine-readable JSON")
     parser.add_argument("--limit", type=int, choices=(60, 70), default=70,
                         help="weekly on-duty limit in hours (default: 70)")
+    parser.add_argument("--driver", metavar="NAME", default=None,
+                        help="check only the named driver from a "
+                             "multi-driver log")
     parser.add_argument("--check", action="store_true",
                         help="exit non-zero if any violation or error")
     args = parser.parse_args(argv)
@@ -272,6 +276,18 @@ def main(argv=None):
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print("error: %s" % exc, file=sys.stderr)
         return 2
+    if args.driver is not None:
+        # Same grouping expression check_log uses, so the filter and
+        # the report can never disagree about who a row belongs to.
+        drivers = sorted({entry.get("driver", "unknown")
+                          for entry in entries}, key=str)
+        if args.driver not in drivers:
+            print("error: no driver %r in the log; drivers found: %s"
+                  % (args.driver, ", ".join(str(d) for d in drivers)),
+                    file=sys.stderr)
+            return 2
+        entries = [entry for entry in entries
+                   if entry.get("driver", "unknown") == args.driver]
     result = check_log(entries, args.limit)
     if args.json:
         print(json.dumps(result, indent=2))

@@ -48,11 +48,14 @@ rows at midnight, one per date.
 python3 eld_violation_checker.py examples/clean.json
 python3 eld_violation_checker.py log.json --json
 python3 eld_violation_checker.py log.json --limit 60
+python3 eld_violation_checker.py log.json --driver "Jane Doe"
 python3 eld_violation_checker.py log.json --check
 ```
 
-`--check` exits non-zero when any violation or data error is found,
-so it works as a gate in a script.
+`--driver NAME` checks only that driver from a multi-driver log; an
+unknown name exits non-zero and lists the drivers found. `--check`
+exits non-zero when any violation or data error is found, so it works
+as a gate in a script.
 
 ## Real example
 
