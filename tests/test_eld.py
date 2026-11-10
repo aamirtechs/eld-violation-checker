@@ -84,6 +84,32 @@ class TestViolations(unittest.TestCase):
         result = eld.check_log(log, 70)
         self.assertEqual(rules(result), ["14-hour window"])
 
+    def test_fourteen_hour_reports_over_limit_minutes(self):
+        # Same log: the window opens at 06:00, so the 14-hour mark
+        # falls at 20:00 and the last 30 driven minutes are over it.
+        log = [
+            entry("Jane", "2026-10-26", "06:00", "12:00", "ON"),
+            entry("Jane", "2026-10-26", "12:00", "16:00", "DRIVING"),
+            entry("Jane", "2026-10-26", "16:00", "19:00", "ON"),
+            entry("Jane", "2026-10-26", "19:00", "20:30", "DRIVING"),
+        ]
+        result = eld.check_log(log, 70)
+        detail = result["violations"][0]["detail"]
+        self.assertIn("13.00 hours after coming on duty", detail)
+        self.assertIn("30 minutes over the 14-hour window", detail)
+
+    def test_over_minutes_when_drive_starts_after_the_window(self):
+        # The mark passes at 20:00; this drive starts at 21:00, so the
+        # whole 30-minute span is over the window.
+        log = [
+            entry("Jane", "2026-10-26", "06:00", "21:00", "ON"),
+            entry("Jane", "2026-10-26", "21:00", "21:30", "DRIVING"),
+        ]
+        result = eld.check_log(log, 70)
+        self.assertEqual(rules(result), ["14-hour window"])
+        detail = result["violations"][0]["detail"]
+        self.assertIn("30 minutes over the 14-hour window", detail)
+
     def test_break_resets_after_thirty_minutes(self):
         log = [
             entry("Jane", "2026-10-26", "08:00", "12:00", "DRIVING"),
